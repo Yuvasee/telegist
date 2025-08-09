@@ -2,6 +2,54 @@
 """
 Telegram Channel Parser
 Exports messages from public Telegram channels to CSV and JSONL formats.
+
+Usage Examples:
+---------------
+
+# Basic export (text only)
+python telegram_parser.py @bbcnews
+
+# Export with media download
+python telegram_parser.py @bbcnews --with-media
+
+# Export with CSV splitting for LLM analysis (recommended for large channels)
+python telegram_parser.py @channel_name --split-size 500
+
+# Custom output directory
+python telegram_parser.py @channel_name --output ./custom_dir
+
+# Full example with all options
+python telegram_parser.py @channel_name \
+    --with-media \
+    --split-size 1000 \
+    --output ./export_dir \
+    --page-size 50
+
+# Resume interrupted export (just run the same command)
+python telegram_parser.py @channel_name --split-size 500
+
+Parameters:
+-----------
+  channel               Channel to export (@username or t.me/slug)
+  -o, --output DIR      Output directory (default: ./export)
+  --with-media         Download media files (photos, documents)
+  --page-size N        Messages per batch (default: 100)
+  --split-size N       Split CSV into files with max N messages each
+  --session NAME       Session file name (default: telegram_session)
+
+Setup:
+------
+1. Install dependencies: pip install -r requirements.txt
+2. Get API credentials from https://my.telegram.org
+3. Create .env file with TG_API_ID and TG_API_HASH
+4. Run the script - it will prompt for phone/password on first use
+
+Notes:
+------
+- Script automatically resumes from last message on interruption
+- CSV splitting creates numbered files (messages_001.csv, messages_002.csv, etc.)
+- JSONL remains single file for resume tracking
+- Handles rate limits and 2FA authentication automatically
 """
 
 import os
