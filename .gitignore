@@ -21,6 +21,8 @@ export/
 *.csv
 *.jsonl
 media/
+output/
+final/
 
 # IDE
 .vscode/

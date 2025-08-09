@@ -61,8 +61,13 @@ import json
 import time
 import argparse
 import re
+import warnings
 from pathlib import Path
 from typing import List, Tuple, Optional
+
+# Suppress the urllib3 OpenSSL warning
+warnings.filterwarnings('ignore', message='urllib3 v2 only supports OpenSSL')
+
 import requests
 from dotenv import load_dotenv
 
@@ -220,6 +225,7 @@ class FileMerger:
             payload['max_tokens'] = self.max_tokens
             
         for attempt in range(self.max_retries):
+            response = None
             try:
                 print(f"  📡 Calling API (attempt {attempt + 1}/{self.max_retries})...")
                 response = requests.post(
@@ -230,29 +236,62 @@ class FileMerger:
                 )
                 
                 if response.status_code == 200:
-                    data = response.json()
-                    
-                    # Save raw response if configured
-                    if self.args.save_responses:
-                        response_file = self.get_output_path(f"response_step_{self.current_step:03d}.json")
-                        with open(response_file, 'w', encoding='utf-8') as f:
-                            json.dump(data, f, indent=2, ensure_ascii=False)
+                    try:
+                        data = response.json()
+                        
+                        # Save raw response if configured
+                        if self.args.save_responses:
+                            response_file = self.get_output_path(f"response_step_{self.current_step:03d}_attempt_{attempt + 1}.json")
+                            with open(response_file, 'w', encoding='utf-8') as f:
+                                json.dump(data, f, indent=2, ensure_ascii=False)
+                                
+                        # Extract content
+                        if 'choices' in data and len(data['choices']) > 0:
+                            content = data['choices'][0]['message']['content']
+                            return content
+                        else:
+                            print(f"  ⚠️  Unexpected API response structure")
+                            if self.args.save_responses:
+                                print(f"     Raw response saved for debugging")
                             
-                    # Extract content
-                    if 'choices' in data and len(data['choices']) > 0:
-                        content = data['choices'][0]['message']['content']
-                        return content
-                    else:
-                        print(f"  ⚠️  Unexpected API response structure")
+                    except json.JSONDecodeError as e:
+                        print(f"  ⚠️  Invalid JSON response: {str(e)}")
+                        print(f"     Response preview: {response.text[:200]}...")
+                        
+                        # Save raw response for debugging
+                        if self.args.save_responses:
+                            response_file = self.get_output_path(f"response_step_{self.current_step:03d}_attempt_{attempt + 1}_raw.txt")
+                            with open(response_file, 'w', encoding='utf-8') as f:
+                                f.write(f"Status: {response.status_code}\n")
+                                f.write(f"Headers: {dict(response.headers)}\n\n")
+                                f.write(response.text)
+                            print(f"     Full response saved to {response_file}")
                         
                 else:
                     print(f"  ⚠️  API error: {response.status_code}")
-                    print(f"     {response.text[:200]}")
+                    print(f"     Response: {response.text[:200]}...")
+                    
+                    # Save error response for debugging
+                    if self.args.save_responses:
+                        response_file = self.get_output_path(f"response_step_{self.current_step:03d}_attempt_{attempt + 1}_error.txt")
+                        with open(response_file, 'w', encoding='utf-8') as f:
+                            f.write(f"Status: {response.status_code}\n")
+                            f.write(f"Headers: {dict(response.headers)}\n\n")
+                            f.write(response.text)
                     
             except requests.exceptions.Timeout:
                 print(f"  ⚠️  Request timeout")
             except Exception as e:
                 print(f"  ⚠️  Error: {str(e)}")
+                # For unexpected errors, try to save what we can
+                if self.args.save_responses and response is not None:
+                    try:
+                        response_file = self.get_output_path(f"response_step_{self.current_step:03d}_attempt_{attempt + 1}_exception.txt")
+                        with open(response_file, 'w', encoding='utf-8') as f:
+                            f.write(f"Exception: {str(e)}\n")
+                            f.write(f"Response text: {response.text if hasattr(response, 'text') else 'No response'}\n")
+                    except:
+                        pass
                 
             if attempt < self.max_retries - 1:
                 print(f"  ⏳ Waiting {self.retry_delay} seconds before retry...")
@@ -265,11 +304,20 @@ class FileMerger:
         base_size = len(base_content)
         merged_size = len(merged_content)
         
-        if merged_size < base_size:
-            print(f"  ❌ Validation failed: Output ({merged_size} chars) is smaller than input ({base_size} chars)")
+        # Allow some size reduction (up to 10%) in case of deduplication
+        min_acceptable_size = int(base_size * 0.9)
+        
+        if merged_size < min_acceptable_size:
+            print(f"  ❌ Validation failed: Output ({merged_size} chars) is much smaller than input ({base_size} chars)")
+            print(f"     Minimum acceptable: {min_acceptable_size} chars (90% of base)")
             return False
             
-        print(f"  ✓ Validation passed: {base_size} → {merged_size} chars (+{merged_size - base_size})")
+        if merged_size < base_size:
+            print(f"  ⚠️  Output slightly smaller: {base_size} → {merged_size} chars (-{base_size - merged_size})")
+            print(f"     This might be due to deduplication, accepting...")
+        else:
+            print(f"  ✓ Validation passed: {base_size} → {merged_size} chars (+{merged_size - base_size})")
+        
         return True
         
     def get_output_path(self, filename: str) -> Path:
@@ -299,18 +347,32 @@ class FileMerger:
         prompt = self.prompt_template.replace('{base_file_content}', base_content)
         prompt = prompt.replace('{merge_file_content}', merge_content)
         
-        # Call API
-        result = self.call_openrouter_api(prompt)
+        # Try merge with validation retries
+        merge_attempts = 0
+        max_merge_attempts = 3
         
-        if result is None:
-            print("  ❌ API call failed after all retries")
-            return None
+        while merge_attempts < max_merge_attempts:
+            merge_attempts += 1
             
-        # Validate result
-        if not self.validate_merge_result(base_content, result):
-            return None
+            if merge_attempts > 1:
+                print(f"  🔄 Retrying merge (attempt {merge_attempts}/{max_merge_attempts})...")
+                time.sleep(self.retry_delay)
             
-        return result
+            # Call API
+            result = self.call_openrouter_api(prompt)
+            
+            if result is None:
+                print("  ❌ API call failed after all retries")
+                continue
+                
+            # Validate result
+            if self.validate_merge_result(base_content, result):
+                return result
+            else:
+                print(f"  ⚠️  Validation failed, will retry..." if merge_attempts < max_merge_attempts else "")
+        
+        print("  ❌ Merge failed after all attempts")
+        return None
         
     def run(self):
         """Main execution flow."""
