@@ -92,6 +92,12 @@ Important:
 
 DEFAULT_TIER2_PROMPT = """You are creating a digest of interesting discussions from a Telegram chat.
 
+## Chat Info:
+- Title: {channel_title}
+- Address: {channel_address}
+- Period: {date_start} — {date_end}
+- Messages: {message_count}
+
 ## Extracted Discussions:
 {summaries}
 
@@ -112,7 +118,10 @@ Create a readable digest that tells the story of each interesting discussion. Fo
 - Otherwise, write in English
 
 ## Output Format:
-Markdown with this structure:
+Markdown with this structure (keep the header info at the top):
+
+> **{channel_title}** ({channel_address})
+> {date_start} — {date_end} | {message_count} сообщений
 
 # Дайджест обсуждений (or "Discussion Digest" for English)
 
@@ -134,11 +143,6 @@ Include links inline where relevant: обсуждали [тему](url).]
 
 [List top 10 most active users from the stats above with their message counts.
 Format: 1. @username — X сообщений]
-
----
-
-**Период**: [start date] — [end date]
-**Сообщений**: [total from {chunk_count} chunks]
 """
 
 
@@ -534,6 +538,29 @@ class ExtractionPipeline:
             phase="loading", current=1, total=1, message=f"Loaded {total_messages} messages"
         ))
 
+        # Load metadata if available (from parser)
+        metadata_path = input_file.parent / "metadata.json"
+        channel_title = "Unknown Chat"
+        channel_address = ""
+        if metadata_path.exists():
+            with open(metadata_path, "r", encoding="utf-8") as f:
+                metadata = json.load(f)
+                channel_title = metadata.get("channel_title", channel_title)
+                channel_address = metadata.get("channel", channel_address)
+
+        # Calculate date range from messages
+        date_start = ""
+        date_end = ""
+        if raw_messages:
+            # date_iso is in ISO format string
+            dates = [m.date_iso for m in raw_messages if m.date_iso]
+            if dates:
+                # Sort as strings (ISO format sorts correctly)
+                dates.sort()
+                # Extract just the date part
+                date_start = dates[0][:10] if dates[0] else ""
+                date_end = dates[-1][:10] if dates[-1] else ""
+
         # Convert preprocessor Message to semantic_chunker Message
         messages: list[Message] = [
             Message.from_dict(m.to_dict()) for m in raw_messages
@@ -576,7 +603,17 @@ class ExtractionPipeline:
         summaries = self._extract_tier1(chunks)
 
         # Phase 5: Tier 2 - Synthesis
-        synthesis = self._synthesize_tier2(summaries, len(chunks), timestamp, user_stats)
+        synthesis = self._synthesize_tier2(
+            summaries=summaries,
+            chunk_count=len(chunks),
+            timestamp=timestamp,
+            user_stats=user_stats,
+            channel_title=channel_title,
+            channel_address=channel_address,
+            date_start=date_start,
+            date_end=date_end,
+            message_count=total_messages,
+        )
 
         # Compile results
         successful = sum(1 for s in summaries if s.success)
@@ -690,6 +727,11 @@ class ExtractionPipeline:
         chunk_count: int,
         timestamp: str,
         user_stats: str = "",
+        channel_title: str = "Unknown Chat",
+        channel_address: str = "",
+        date_start: str = "",
+        date_end: str = "",
+        message_count: int = 0,
     ) -> str:
         """Run Tier 2 synthesis on chunk summaries."""
         self._report_progress(ProgressUpdate(
@@ -712,6 +754,11 @@ class ExtractionPipeline:
             chunk_count=chunk_count,
             timestamp=timestamp,
             user_stats=user_stats,
+            channel_title=channel_title,
+            channel_address=channel_address,
+            date_start=date_start,
+            date_end=date_end,
+            message_count=message_count,
         )
 
         # Call provider
@@ -847,6 +894,10 @@ Examples:
     if not args.input_file.exists():
         print(f"Error: Input file not found: {args.input_file}", file=sys.stderr)
         return 1
+
+    # Default output_dir to input file's parent directory
+    if not args.output_dir:
+        args.output_dir = args.input_file.parent
 
     # Create config
     config = PipelineConfig(

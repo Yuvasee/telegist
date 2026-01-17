@@ -58,6 +58,7 @@ import csv
 import re
 import asyncio
 import argparse
+import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional, Tuple, Union
@@ -67,6 +68,22 @@ from telethon.tl.functions.channels import JoinChannelRequest
 from telethon.tl.types import MessageMediaDocument, MessageMediaPhoto
 from tqdm import tqdm
 from dotenv import load_dotenv
+
+
+def create_run_folder_name(channel: Union[str, int]) -> str:
+    """Create a unique folder name for this run: YY-MM-DD-channel-uuid."""
+    date_str = datetime.now().strftime("%y-%m-%d")
+
+    # Normalize channel name for folder
+    if isinstance(channel, int):
+        channel_slug = str(abs(channel))
+    else:
+        channel_slug = channel.lstrip("@").replace("/", "_")
+
+    # Short UUID (first 6 chars)
+    short_uuid = uuid.uuid4().hex[:6]
+
+    return f"{date_str}-{channel_slug}-{short_uuid}"
 
 
 def normalize_channel(channel: str) -> Union[str, int]:
@@ -324,7 +341,7 @@ def extract_message_data(
 
 async def export_channel(
     client: TelegramClient,
-    channel: str,
+    channel: Union[str, int],
     output_dir: Path,
     download_media: bool = False,
     page_size: int = 100,
@@ -336,8 +353,9 @@ async def export_channel(
     jsonl_path = output_dir / "messages.jsonl"
     media_dir = output_dir / "media"
 
-    # Normalize channel name
-    channel = normalize_channel(channel)
+    # Normalize channel name if string
+    if isinstance(channel, str):
+        channel = normalize_channel(channel)
 
     # Join channel if needed
     try:
@@ -521,23 +539,51 @@ Examples:
         print("Error: TG_API_ID must be a number")
         return 1
 
-    # Create output directory
+    # Create base output directory (for session file)
     args.output.mkdir(parents=True, exist_ok=True)
 
+    # Normalize channel for folder naming
+    normalized_channel = normalize_channel(args.channel)
+
+    # Create unique run subfolder
+    run_folder_name = create_run_folder_name(normalized_channel)
+    run_folder = args.output / run_folder_name
+    run_folder.mkdir(parents=True, exist_ok=True)
+
+    # Session stays in base output folder (reusable across runs)
+    session_path = args.output / args.session
+
     # Initialize client and run export
-    client = TelegramClient(str(args.output / args.session), api_id, api_hash)
+    client = TelegramClient(str(session_path), api_id, api_hash)
 
     try:
         await client.start()
+
+        # Get entity to save channel info
+        entity = await client.get_entity(normalized_channel)
+        channel_title = entity.title if hasattr(entity, 'title') else str(normalized_channel)
+
+        # Save metadata for extraction pipeline
+        metadata = {
+            "channel": args.channel,
+            "channel_title": channel_title,
+            "days": args.days,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        with open(run_folder / "metadata.json", "w", encoding="utf-8") as f:
+            json.dump(metadata, f, indent=2, ensure_ascii=False)
+
         await export_channel(
             client,
-            args.channel,
-            args.output,
+            normalized_channel,
+            run_folder,
             download_media=args.with_media,
             page_size=args.page_size,
             split_size=args.split_size,
             days=args.days,
         )
+
+        print(f"\nRun folder: {run_folder}")
     except KeyboardInterrupt:
         print("\n\nExport interrupted. You can resume by running the same command.")
     except Exception as e:
