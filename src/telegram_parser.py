@@ -60,7 +60,7 @@ import asyncio
 import argparse
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Union
 
 from telethon import TelegramClient
 from telethon.tl.functions.channels import JoinChannelRequest
@@ -69,7 +69,7 @@ from tqdm import tqdm
 from dotenv import load_dotenv
 
 
-def normalize_channel(channel: str) -> str | int:
+def normalize_channel(channel: str) -> Union[str, int]:
     """Normalize channel input to @username format or numeric ID."""
     channel = channel.strip()
 
@@ -382,7 +382,8 @@ async def export_channel(
                 break
             batch.append(msg)
 
-        if not batch or reached_cutoff:
+        # Exit if no messages in batch
+        if not batch:
             break
 
         # Process and write batch
@@ -422,6 +423,10 @@ async def export_channel(
         # Update max_id to oldest message in batch for next iteration
         if batch:
             max_id = min(msg.id for msg in batch)
+
+        # Stop if we've reached the cutoff date
+        if reached_cutoff:
+            break
 
     pbar.close()
     csv_writer_manager.close()
