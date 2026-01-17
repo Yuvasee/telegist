@@ -70,9 +70,72 @@ export/
 └── telegram_session.session (authentication session)
 ```
 
-## CSV Analysis Workflow
+## Semantic Chunking Pipeline
 
-When analyzing exported data with LLMs:
+The project includes an intelligent extraction pipeline that uses semantic chunking and two-tier LLM processing:
+
+### Preprocessing Messages
+```bash
+# Deduplicate messages and extract links
+python preprocessor.py messages.jsonl -o cleaned.jsonl
+
+# View preprocessing stats
+python preprocessor.py messages.jsonl --stats-only
+```
+
+### Semantic Chunking
+```bash
+# Chunk messages with temporal + thread awareness
+python semantic_chunker.py messages.jsonl -o chunks/
+
+# Custom chunk size and gap detection
+python semantic_chunker.py messages.jsonl --max-tokens 1000 --gap-minutes 15
+
+# With overlap for context preservation
+python semantic_chunker.py messages.jsonl --overlap 0.2
+```
+
+### Full Extraction Pipeline
+```bash
+# Basic extraction (uses default models: Gemini Flash for T1, Claude Sonnet for T2)
+python extraction_pipeline.py messages.jsonl -o output/
+
+# With cost tracking and progress
+python extraction_pipeline.py messages.jsonl -o output/ --show-cost
+
+# Custom models
+python extraction_pipeline.py messages.jsonl --tier1-model openai/gpt-4o-mini --tier2-model anthropic/claude-3-5-sonnet
+
+# Control parallelism
+python extraction_pipeline.py messages.jsonl --max-parallel 3
+
+# Skip preprocessing
+python extraction_pipeline.py messages.jsonl --no-preprocess
+```
+
+### Environment Variables for Pipeline
+```bash
+# API keys (add to .env)
+OPENROUTER_API_KEY=...    # For OpenRouter models
+GEMINI_API_KEY=...        # For direct Gemini access
+ANTHROPIC_API_KEY=...     # For direct Anthropic access
+
+# Model defaults (optional)
+TIER1_MODEL=google/gemini-flash-1.5
+TIER2_MODEL=anthropic/claude-3.5-sonnet
+```
+
+### Pipeline Output
+```
+output/
+├── extraction_result.json  # Full structured results with confidence scores
+├── synthesis.md            # Final merged report in Markdown
+└── cost_summary.txt        # Token usage and cost breakdown
+```
+
+## CSV Analysis Workflow (Legacy)
+
+When analyzing exported data with LLMs manually:
 1. Use `--split-size 500` for optimal chunk size (100-200KB per file)
 2. Files are numbered sequentially (messages_001.csv, messages_002.csv, etc.)
 3. Each file contains complete messages with all headers
