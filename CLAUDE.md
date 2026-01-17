@@ -105,7 +105,7 @@ OPENROUTER_API_KEY=...
 
 # Optional: Override default models
 TIER1_MODEL=google/gemini-2.0-flash-001
-TIER2_MODEL=anthropic/claude-sonnet-4
+TIER2_MODEL=google/gemini-3-flash-preview
 ```
 
 ## Extraction Output Format
@@ -144,10 +144,10 @@ The pipeline produces **discussion-based narrative digests**:
    - Extracts: topic, participants, summary, quotes, links
    - ~$0.003 per 100 messages
 
-2. **Tier 2** (Claude Sonnet 4): Synthesis into narrative digest
+2. **Tier 2** (Gemini 3 Flash Preview): Synthesis into narrative digest
    - Merges related discussions
    - Creates readable narratives with embedded quotes
-   - ~$0.06 per synthesis
+   - 1M context window, 5x cheaper than Claude Sonnet
 
 ### Data Flow
 

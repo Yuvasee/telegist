@@ -52,7 +52,7 @@ class ProviderType(str, Enum):
 
 # Default models per tier
 DEFAULT_TIER1_MODEL = "google/gemini-2.0-flash-001"  # Fast, cheap via OpenRouter
-DEFAULT_TIER2_MODEL = "anthropic/claude-sonnet-4"  # Quality via OpenRouter
+DEFAULT_TIER2_MODEL = "google/gemini-3-flash-preview"  # Quality + 1M context via OpenRouter
 
 # Alternative tier configurations
 TIER_ALTERNATIVES = {
@@ -63,9 +63,10 @@ TIER_ALTERNATIVES = {
         "qwen/qwen-2.5-72b-instruct",
     ],
     ModelTier.TIER2: [
+        "google/gemini-3-flash-preview",
         "anthropic/claude-sonnet-4",
-        "anthropic/claude-sonnet-4.5",
-        "openai/gpt-4o",
+        "qwen/qwen3-235b-a22b",
+        "deepseek/deepseek-chat-v3-0324",
     ],
 }
 

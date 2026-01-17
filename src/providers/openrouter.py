@@ -109,6 +109,36 @@ OPENROUTER_MODELS: dict[str, ModelInfo] = {
             output_price=Decimal("10.00"),
         ),
     ),
+    "google/gemini-3-flash-preview": ModelInfo(
+        id="google/gemini-3-flash-preview",
+        provider="openrouter",
+        name="Gemini 3 Flash Preview",
+        context_window=1_048_576,
+        pricing=ModelPricing(
+            input_price=Decimal("0.50"),
+            output_price=Decimal("3.00"),
+        ),
+    ),
+    "qwen/qwen3-235b-a22b": ModelInfo(
+        id="qwen/qwen3-235b-a22b",
+        provider="openrouter",
+        name="Qwen3 235B",
+        context_window=40_960,
+        pricing=ModelPricing(
+            input_price=Decimal("0.20"),
+            output_price=Decimal("0.60"),
+        ),
+    ),
+    "deepseek/deepseek-chat-v3-0324": ModelInfo(
+        id="deepseek/deepseek-chat-v3-0324",
+        provider="openrouter",
+        name="DeepSeek V3",
+        context_window=163_840,
+        pricing=ModelPricing(
+            input_price=Decimal("0.19"),
+            output_price=Decimal("0.87"),
+        ),
+    ),
 }
 
 
