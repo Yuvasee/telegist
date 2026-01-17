@@ -557,9 +557,9 @@ class ExtractionPipeline:
             if dates:
                 # Sort as strings (ISO format sorts correctly)
                 dates.sort()
-                # Extract just the date part
-                date_start = dates[0][:10] if dates[0] else ""
-                date_end = dates[-1][:10] if dates[-1] else ""
+                # Extract datetime (YYYY-MM-DD HH:MM)
+                date_start = dates[0][:16].replace("T", " ") if dates[0] else ""
+                date_end = dates[-1][:16].replace("T", " ") if dates[-1] else ""
 
         # Convert preprocessor Message to semantic_chunker Message
         messages: list[Message] = [
