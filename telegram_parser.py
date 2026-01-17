@@ -58,6 +58,7 @@ import csv
 import re
 import asyncio
 import argparse
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -68,11 +69,18 @@ from tqdm import tqdm
 from dotenv import load_dotenv
 
 
-def normalize_channel(channel: str) -> str:
-    """Normalize channel input to @username format."""
-    m = re.match(r"^(https?://t\.me/)?(@?[\w\d_]+)$", channel.strip())
+def normalize_channel(channel: str) -> str | int:
+    """Normalize channel input to @username format or numeric ID."""
+    channel = channel.strip()
+
+    # Check if it's a numeric ID (can be negative for channels)
+    if re.match(r"^-?\d+$", channel):
+        return int(channel)
+
+    # Check for @username or t.me/slug format
+    m = re.match(r"^(https?://t\.me/)?(@?[\w\d_]+)$", channel)
     if not m:
-        raise ValueError("Provide @channel_username or t.me/slug format.")
+        raise ValueError("Provide @channel_username, t.me/slug, or numeric chat ID.")
     slug = m.group(2)
     return slug if slug.startswith("@") else f"@{slug}"
 
@@ -321,6 +329,7 @@ async def export_channel(
     download_media: bool = False,
     page_size: int = 100,
     split_size: Optional[int] = None,
+    days: Optional[int] = None,
 ) -> int:
     """Export messages from a Telegram channel."""
     # Setup paths
@@ -348,17 +357,32 @@ async def export_channel(
         media_dir.mkdir(parents=True, exist_ok=True)
 
     total_fetched = 0
-    offset_id = last_id
+    max_id = 0  # For pagination: get messages with id < max_id
+
+    # Calculate cutoff_date if days filter is specified
+    cutoff_date = None
+    if days:
+        cutoff_date = datetime.now(timezone.utc) - timedelta(days=days)
+        print(f"Filtering messages from last {days} days (since {cutoff_date.strftime('%Y-%m-%d')})")
+
     pbar = tqdm(desc="Fetching messages", unit="msg")
+    reached_cutoff = False
 
     while True:
         batch = []
-        async for msg in client.iter_messages(
-            entity, limit=page_size, min_id=offset_id, reverse=True
-        ):
+        # Fetch newest-to-oldest, using max_id to paginate
+        kwargs = {"limit": page_size}
+        if max_id > 0:
+            kwargs["max_id"] = max_id
+
+        async for msg in client.iter_messages(entity, **kwargs):
+            # Stop if we've gone past the cutoff date
+            if cutoff_date and msg.date and msg.date.replace(tzinfo=timezone.utc) < cutoff_date:
+                reached_cutoff = True
+                break
             batch.append(msg)
 
-        if not batch:
+        if not batch or reached_cutoff:
             break
 
         # Process and write batch
@@ -393,8 +417,11 @@ async def export_channel(
                 )
 
                 total_fetched += 1
-                offset_id = max(offset_id, msg.id)
                 pbar.update(1)
+
+        # Update max_id to oldest message in batch for next iteration
+        if batch:
+            max_id = min(msg.id for msg in batch)
 
     pbar.close()
     csv_writer_manager.close()
@@ -458,6 +485,11 @@ Examples:
         type=int,
         help="Split CSV into multiple files with max N messages each (e.g., --split-size 1000)",
     )
+    parser.add_argument(
+        "--days",
+        type=int,
+        help="Only fetch messages from last N days (e.g., --days 15)",
+    )
 
     args = parser.parse_args()
 
@@ -499,6 +531,7 @@ Examples:
             download_media=args.with_media,
             page_size=args.page_size,
             split_size=args.split_size,
+            days=args.days,
         )
     except KeyboardInterrupt:
         print("\n\nExport interrupted. You can resume by running the same command.")

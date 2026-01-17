@@ -16,12 +16,10 @@ ENV/
 *.session
 *.session-journal
 
-# Export output
-export/
-*.csv
-*.jsonl
-media/
+# Output folders (parser results)
+*_output/
 output/
+export/
 final/
 
 # IDE
@@ -34,3 +32,11 @@ final/
 # OS
 .DS_Store
 Thumbs.db
+
+# Samocode
+_worktrees/
+_sessions/
+.samocode
+
+# Test files
+test_*

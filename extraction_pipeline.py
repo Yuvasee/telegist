@@ -46,82 +46,89 @@ from semantic_chunker import Chunk, ChunkerConfig, SemanticChunker, Message
 # Prompt Templates
 # =============================================================================
 
-DEFAULT_TIER1_PROMPT = """You are an expert analyst extracting structured insights from Telegram channel messages.
+DEFAULT_TIER1_PROMPT = """You are analyzing a Telegram chat discussion to identify interesting conversation threads.
 
 ## Messages to Analyze:
 {messages}
 
 ## Task:
-Extract the following categories with confidence scores (1-5, where 5 is highest confidence):
+Identify distinct discussion threads/topics in these messages. For each thread, extract:
+- The topic/subject being discussed
+- Key participants (usernames)
+- The flow of conversation (what was said, who responded)
+- Notable quotes that capture the essence
+- Any links/resources mentioned
 
-1. **Key Insights**: Main takeaways, observations, important information
-2. **Action Items**: Tasks, recommendations, things to do
-3. **Resources**: Links, tools, services, platforms mentioned
-4. **Notable Quotes**: Memorable or significant statements worth preserving verbatim
+## Language Rule:
+- If messages are in Russian, write your output in Russian
+- For other languages, write in English
 
 ## Output Format:
-Return ONLY valid JSON in this exact structure:
+Return ONLY valid JSON:
 {{
-  "key_insights": [
-    {{"text": "insight text", "confidence": 4}},
-    ...
+  "discussions": [
+    {{
+      "topic": "Brief topic title",
+      "participants": ["username1", "username2"],
+      "summary": "2-4 sentences describing what was discussed, the key points made, and any conclusions reached",
+      "quotes": [
+        {{"author": "username", "text": "exact quote in original language"}}
+      ],
+      "links": [
+        {{"url": "https://...", "context": "why it was shared"}}
+      ],
+      "importance": 3
+    }}
   ],
-  "action_items": [
-    {{"text": "action item", "confidence": 3}},
-    ...
-  ],
-  "resources": [
-    {{"url": "https://...", "description": "what it is", "confidence": 5}},
-    ...
-  ],
-  "notable_quotes": [
-    {{"quote": "exact quote text", "context": "brief context", "confidence": 4}},
-    ...
-  ]
+  "language": "ru" or "en"
 }}
 
 Important:
-- Only include items actually present in the messages
-- Use extractive quotes (exact text) for notable quotes
-- Assign confidence based on clarity and importance
-- Output valid JSON only, no markdown code blocks in the response
+- Focus on substantive discussions, skip trivial greetings/small talk
+- Preserve exact quotes in original language
+- Importance: 1-5 scale (5 = very interesting/valuable discussion)
+- Output valid JSON only, no markdown code blocks
 """
 
-DEFAULT_TIER2_PROMPT = """You are synthesizing multiple chunk summaries into a comprehensive final report.
+DEFAULT_TIER2_PROMPT = """You are creating a digest of interesting discussions from a Telegram chat.
 
-## Chunk Summaries:
+## Extracted Discussions:
 {summaries}
 
 ## Task:
-Create a well-organized final report that:
-1. Merges similar insights (weighted by confidence scores)
-2. Deduplicates action items and resources
-3. Preserves the most notable quotes
-4. Organizes content by theme/topic
+Create a readable digest that tells the story of each interesting discussion. For each discussion:
+1. Merge related topics from different chunks into cohesive narratives
+2. Include participant names to show who said what
+3. Embed relevant quotes naturally within the narrative
+4. Include links where they add value
+5. Skip low-importance discussions (importance < 3)
+
+## Language Rule:
+- Check the "language" field in summaries
+- If language is "ru", write the ENTIRE digest in Russian
+- Otherwise, write in English
 
 ## Output Format:
-Markdown with the following structure:
+Markdown with this structure:
 
-# Extraction Summary
+# Дайджест обсуждений (or "Discussion Digest" for English)
 
-## Key Insights
-[Merged insights organized by theme, with high-confidence items prioritized]
+## [Topic Title]
 
-## Action Items
-[Deduplicated action items, sorted by confidence]
-
-## Resources
-[Unique resources with descriptions]
-
-## Notable Quotes
-[Best quotes with context]
-
-## Statistics
-- Total chunks processed: {chunk_count}
-- Items extracted: [counts per category]
+[2-5 paragraph narrative describing the discussion flow. Who started it, what points were made,
+how others responded. Embed quotes naturally like: @username отметил: "quote here".
+Include links inline where relevant: обсуждали [тему](url).]
 
 ---
-*Generated on {timestamp}*
+
+## [Next Topic Title]
+
+[Another discussion narrative...]
+
+---
+
+**Период**: [start date] — [end date]
+**Сообщений**: [total from {chunk_count} chunks]
 """
 
 
@@ -131,50 +138,44 @@ Markdown with the following structure:
 
 
 @dataclass
-class ExtractedItem:
-    """Base class for extracted items with confidence."""
+class DiscussionQuote:
+    """A quote from a discussion participant."""
+    author: str
     text: str
-    confidence: int  # 1-5 scale
-    source_chunk_id: str = ""
 
     def to_dict(self) -> dict[str, Any]:
-        return {
-            "text": self.text,
-            "confidence": self.confidence,
-            "source_chunk_id": self.source_chunk_id,
-        }
+        return {"author": self.author, "text": self.text}
 
 
 @dataclass
-class ResourceItem:
-    """Extracted resource/link."""
+class DiscussionLink:
+    """A link shared in a discussion."""
     url: str
-    description: str
-    confidence: int
-    source_chunk_id: str = ""
+    context: str
 
     def to_dict(self) -> dict[str, Any]:
-        return {
-            "url": self.url,
-            "description": self.description,
-            "confidence": self.confidence,
-            "source_chunk_id": self.source_chunk_id,
-        }
+        return {"url": self.url, "context": self.context}
 
 
 @dataclass
-class QuoteItem:
-    """Extracted notable quote."""
-    quote: str
-    context: str
-    confidence: int
+class Discussion:
+    """A discussion thread extracted from chat messages."""
+    topic: str
+    participants: list[str]
+    summary: str
+    quotes: list[DiscussionQuote]
+    links: list[DiscussionLink]
+    importance: int  # 1-5 scale
     source_chunk_id: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "quote": self.quote,
-            "context": self.context,
-            "confidence": self.confidence,
+            "topic": self.topic,
+            "participants": self.participants,
+            "summary": self.summary,
+            "quotes": [q.to_dict() for q in self.quotes],
+            "links": [l.to_dict() for l in self.links],
+            "importance": self.importance,
             "source_chunk_id": self.source_chunk_id,
         }
 
@@ -189,10 +190,8 @@ class ChunkSummary:
     message_count: int
     token_count: int
 
-    key_insights: list[ExtractedItem] = field(default_factory=list)
-    action_items: list[ExtractedItem] = field(default_factory=list)
-    resources: list[ResourceItem] = field(default_factory=list)
-    notable_quotes: list[QuoteItem] = field(default_factory=list)
+    discussions: list[Discussion] = field(default_factory=list)
+    language: str = "en"  # detected language: "ru" or "en"
 
     # Processing metadata
     success: bool = True
@@ -209,10 +208,8 @@ class ChunkSummary:
             },
             "message_count": self.message_count,
             "token_count": self.token_count,
-            "key_insights": [i.to_dict() for i in self.key_insights],
-            "action_items": [i.to_dict() for i in self.action_items],
-            "resources": [r.to_dict() for r in self.resources],
-            "notable_quotes": [q.to_dict() for q in self.notable_quotes],
+            "discussions": [d.to_dict() for d in self.discussions],
+            "language": self.language,
             "success": self.success,
             "error_message": self.error_message,
             "processing_time_ms": self.processing_time_ms,
@@ -220,8 +217,7 @@ class ChunkSummary:
 
     @property
     def item_count(self) -> int:
-        return (len(self.key_insights) + len(self.action_items) +
-                len(self.resources) + len(self.notable_quotes))
+        return len(self.discussions)
 
 
 @dataclass
@@ -324,47 +320,40 @@ def parse_tier1_response(content: str, chunk_id: str) -> ChunkSummary:
             error_message="Failed to parse JSON response",
         )
 
-    # Parse key insights
-    key_insights: list[ExtractedItem] = []
-    for item in data.get("key_insights", []):
+    # Parse discussions
+    discussions: list[Discussion] = []
+    for item in data.get("discussions", []):
         if isinstance(item, dict):
-            key_insights.append(ExtractedItem(
-                text=item.get("text", ""),
-                confidence=item.get("confidence", 3),
+            # Parse quotes
+            quotes: list[DiscussionQuote] = []
+            for q in item.get("quotes", []):
+                if isinstance(q, dict):
+                    quotes.append(DiscussionQuote(
+                        author=q.get("author", ""),
+                        text=q.get("text", ""),
+                    ))
+
+            # Parse links
+            links: list[DiscussionLink] = []
+            for link in item.get("links", []):
+                if isinstance(link, dict):
+                    links.append(DiscussionLink(
+                        url=link.get("url", ""),
+                        context=link.get("context", ""),
+                    ))
+
+            discussions.append(Discussion(
+                topic=item.get("topic", ""),
+                participants=item.get("participants", []),
+                summary=item.get("summary", ""),
+                quotes=quotes,
+                links=links,
+                importance=item.get("importance", 3),
                 source_chunk_id=chunk_id,
             ))
 
-    # Parse action items
-    action_items: list[ExtractedItem] = []
-    for item in data.get("action_items", []):
-        if isinstance(item, dict):
-            action_items.append(ExtractedItem(
-                text=item.get("text", ""),
-                confidence=item.get("confidence", 3),
-                source_chunk_id=chunk_id,
-            ))
-
-    # Parse resources
-    resources: list[ResourceItem] = []
-    for item in data.get("resources", []):
-        if isinstance(item, dict):
-            resources.append(ResourceItem(
-                url=item.get("url", ""),
-                description=item.get("description", ""),
-                confidence=item.get("confidence", 3),
-                source_chunk_id=chunk_id,
-            ))
-
-    # Parse quotes
-    notable_quotes: list[QuoteItem] = []
-    for item in data.get("notable_quotes", []):
-        if isinstance(item, dict):
-            notable_quotes.append(QuoteItem(
-                quote=item.get("quote", ""),
-                context=item.get("context", ""),
-                confidence=item.get("confidence", 3),
-                source_chunk_id=chunk_id,
-            ))
+    # Get detected language
+    language = data.get("language", "en")
 
     return ChunkSummary(
         chunk_id=chunk_id,
@@ -373,10 +362,8 @@ def parse_tier1_response(content: str, chunk_id: str) -> ChunkSummary:
         time_range_end="",
         message_count=0,
         token_count=0,
-        key_insights=key_insights,
-        action_items=action_items,
-        resources=resources,
-        notable_quotes=notable_quotes,
+        discussions=discussions,
+        language=language,
         success=True,
     )
 

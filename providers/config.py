@@ -51,22 +51,21 @@ class ProviderType(str, Enum):
 # =============================================================================
 
 # Default models per tier
-DEFAULT_TIER1_MODEL = "google/gemini-flash-1.5"  # Fast, cheap via OpenRouter
-DEFAULT_TIER2_MODEL = "anthropic/claude-3.5-sonnet"  # Quality via OpenRouter
+DEFAULT_TIER1_MODEL = "google/gemini-2.0-flash-001"  # Fast, cheap via OpenRouter
+DEFAULT_TIER2_MODEL = "anthropic/claude-sonnet-4"  # Quality via OpenRouter
 
 # Alternative tier configurations
 TIER_ALTERNATIVES = {
     ModelTier.TIER1: [
-        "google/gemini-flash-1.5",
+        "google/gemini-2.0-flash-001",
+        "google/gemini-2.0-flash-lite-001",
         "openai/gpt-4o-mini",
         "qwen/qwen-2.5-72b-instruct",
-        "gemini-1.5-flash",  # Direct Gemini
     ],
     ModelTier.TIER2: [
-        "anthropic/claude-3.5-sonnet",
         "anthropic/claude-sonnet-4",
+        "anthropic/claude-sonnet-4.5",
         "openai/gpt-4o",
-        "claude-3-5-sonnet-20241022",  # Direct Anthropic
     ],
 }
 
@@ -182,7 +181,7 @@ def get_config() -> PipelineConfig:
     Load pipeline configuration from environment.
 
     Environment variables:
-        TIER1_MODEL: Model ID for tier 1 (default: google/gemini-flash-1.5)
+        TIER1_MODEL: Model ID for tier 1 (default: google/gemini-1.5-flash)
         TIER2_MODEL: Model ID for tier 2 (default: anthropic/claude-3.5-sonnet)
         OPENROUTER_API_KEY: OpenRouter API key
         GOOGLE_API_KEY: Google AI API key (for direct Gemini)

@@ -37,11 +37,21 @@ from providers.base import (
 # Source: https://openrouter.ai/docs#models
 OPENROUTER_MODELS: dict[str, ModelInfo] = {
     # Tier 1 - Fast/Cheap models for chunk extraction
-    "google/gemini-flash-1.5": ModelInfo(
-        id="google/gemini-flash-1.5",
+    "google/gemini-2.0-flash-001": ModelInfo(
+        id="google/gemini-2.0-flash-001",
         provider="openrouter",
-        name="Gemini 1.5 Flash",
-        context_window=1_000_000,
+        name="Gemini 2.0 Flash",
+        context_window=1_048_576,
+        pricing=ModelPricing(
+            input_price=Decimal("0.10"),
+            output_price=Decimal("0.40"),
+        ),
+    ),
+    "google/gemini-2.0-flash-lite-001": ModelInfo(
+        id="google/gemini-2.0-flash-lite-001",
+        provider="openrouter",
+        name="Gemini 2.0 Flash Lite",
+        context_window=1_048_576,
         pricing=ModelPricing(
             input_price=Decimal("0.075"),
             output_price=Decimal("0.30"),
@@ -67,33 +77,23 @@ OPENROUTER_MODELS: dict[str, ModelInfo] = {
             output_price=Decimal("0.40"),
         ),
     ),
-    "qwen/qwen3-235b-a22b-2507": ModelInfo(
-        id="qwen/qwen3-235b-a22b-2507",
-        provider="openrouter",
-        name="Qwen3 235B A22B",
-        context_window=131_072,
-        pricing=ModelPricing(
-            input_price=Decimal("0.14"),
-            output_price=Decimal("0.14"),
-        ),
-    ),
 
     # Tier 2 - Quality models for synthesis
     "anthropic/claude-sonnet-4": ModelInfo(
         id="anthropic/claude-sonnet-4",
         provider="openrouter",
         name="Claude Sonnet 4",
-        context_window=200_000,
+        context_window=1_000_000,
         pricing=ModelPricing(
             input_price=Decimal("3.00"),
             output_price=Decimal("15.00"),
         ),
     ),
-    "anthropic/claude-3.5-sonnet": ModelInfo(
-        id="anthropic/claude-3.5-sonnet",
+    "anthropic/claude-sonnet-4.5": ModelInfo(
+        id="anthropic/claude-sonnet-4.5",
         provider="openrouter",
-        name="Claude 3.5 Sonnet",
-        context_window=200_000,
+        name="Claude Sonnet 4.5",
+        context_window=1_000_000,
         pricing=ModelPricing(
             input_price=Decimal("3.00"),
             output_price=Decimal("15.00"),
@@ -141,7 +141,7 @@ class OpenRouterProvider(BaseProvider):
         Initialize OpenRouter provider.
 
         Args:
-            model_id: OpenRouter model ID (e.g., "google/gemini-flash-1.5").
+            model_id: OpenRouter model ID (e.g., "google/gemini-1.5-flash").
             api_key: OpenRouter API key.
             api_url: Optional custom API URL.
             max_retries: Maximum retry attempts.

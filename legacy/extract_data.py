@@ -19,20 +19,22 @@ python extract_data.py messages_001.csv messages_005.csv \
     --interactive \
     --output-dir debug_output/
 
-# Production run with auto-confirmation
+# Production run with auto-confirmation (default 3 parallel workers)
 python extract_data.py messages_001.csv messages_043.csv \
     --output-dir results/ \
     --yes
 
-# Custom prompt template
+# Custom prompt template with high parallelism
 python extract_data.py messages_001.csv messages_010.csv \
     --prompt-file custom_extract_prompt.md \
-    --save-responses
+    --save-responses \
+    --max-parallel 5
 
-# Skip already processed files
+# Skip already processed files (sequential for safety)
 python extract_data.py messages_001.csv messages_043.csv \
     --skip-existing \
-    --output-dir analysis/
+    --output-dir analysis/ \
+    --max-parallel 1
 
 # All parameters example
 python extract_data.py export/messages_001.csv export/messages_043.csv \
@@ -50,16 +52,20 @@ Parameters:
   --output-dir DIR      Output directory for analysis files (default: current directory)
   --prompt-file FILE    Path to prompt template (default: extract-prompt.md)
   --save-responses      Save raw API responses for debugging
-  --interactive         Pause after each extraction for user confirmation
+  --interactive         Pause after each extraction for user confirmation (forces sequential processing)
   --skip-existing       Skip files that already have analysis output
   -y, --yes            Skip initial file list confirmation
+  --max-parallel        Maximum parallel file processing workers (default: 3)
 
 Notes:
 ------
 - Processes only 'text' column from CSV files
 - Creates analysis_NNN.md files from messages_NNN.csv files
 - Uses same OpenRouter API configuration as merge_files.py
-- Retries 3 times on failure, then stops completely
+- Processes files in parallel by default (3 workers) for faster processing
+- Retries 3 times per file on API failure, continues with other files
+- Collects and reports all failures at the end
+- Interactive mode forces sequential processing (1 worker)
 - Overwrites existing analysis files unless --skip-existing is used
 """
 
@@ -72,7 +78,9 @@ import argparse
 import re
 import warnings
 from pathlib import Path
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Tuple
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 
 # Suppress the urllib3 OpenSSL warning
 warnings.filterwarnings('ignore', message='urllib3 v2 only supports OpenSSL')
@@ -88,6 +96,8 @@ class DataExtractor:
         self.load_config()
         self.files_to_process = []
         self.current_file_index = 0
+        self.api_lock = threading.Lock()  # For rate limiting
+        self.progress_lock = threading.Lock()  # For progress reporting
         
     def load_config(self):
         """Load configuration from .env file."""
@@ -299,7 +309,7 @@ class DataExtractor:
         # Join messages with clear separators
         return "\n\n---\n\n".join(messages)
         
-    def call_openrouter_api(self, prompt: str, file_index: int) -> Optional[str]:
+    def call_openrouter_api(self, prompt: str, file_index: int, filename: str = "") -> Optional[str]:
         """Call OpenRouter API with the extraction prompt."""
         headers = {
             'Authorization': f'Bearer {self.api_key}',
@@ -329,13 +339,19 @@ class DataExtractor:
         for attempt in range(self.max_retries):
             response = None
             try:
-                print(f"  📡 Calling API (attempt {attempt + 1}/{self.max_retries})...")
-                response = requests.post(
-                    self.api_url,
-                    headers=headers,
-                    json=payload,
-                    timeout=300  # 5 minute timeout
-                )
+                with self.progress_lock:
+                    print(f"  📡 {filename}: Calling API (attempt {attempt + 1}/{self.max_retries})...")
+                
+                # Rate limiting with lock
+                with self.api_lock:
+                    response = requests.post(
+                        self.api_url,
+                        headers=headers,
+                        json=payload,
+                        timeout=300  # 5 minute timeout
+                    )
+                    # Small delay to avoid rate limiting
+                    time.sleep(0.5)
                 
                 if response.status_code == 200:
                     try:
@@ -396,45 +412,114 @@ class DataExtractor:
             
         return self.get_output_path(output_name)
         
-    def process_csv_file(self, csv_path: Path, file_index: int) -> bool:
+    def process_csv_file_task(self, csv_path: Path, file_index: int, total_files: int) -> Tuple[bool, str, Optional[str]]:
+        """Task wrapper for parallel processing. Returns (success, filename, error_message)."""
+        try:
+            success = self.process_csv_file(csv_path, file_index, total_files)
+            return (success, csv_path.name, None)
+        except Exception as e:
+            return (False, csv_path.name, str(e))
+
+    def process_csv_file(self, csv_path: Path, file_index: int, total_files: int = 1) -> bool:
         """Process a single CSV file and generate analysis."""
         output_file = self.get_output_filename(csv_path)
         
         # Check if should skip
         if self.args.skip_existing and output_file.exists():
-            print(f"  ⏭️  Skipping (already exists): {output_file.name}")
+            with self.progress_lock:
+                print(f"  ⏭️  {csv_path.name}: Skipping (already exists)")
             return True
             
-        print(f"\n📝 Processing: {csv_path.name}")
+        with self.progress_lock:
+            print(f"📝 [{file_index}/{total_files}] Processing: {csv_path.name}")
         
         # Extract messages
         messages_content = self.extract_messages_from_csv(csv_path)
         
         if not messages_content:
-            print(f"  ⚠️  No messages found in {csv_path.name}")
+            with self.progress_lock:
+                print(f"  ⚠️  {csv_path.name}: No messages found")
             return True  # Not a failure, just empty
             
         message_count = len(messages_content.split('\n\n---\n\n'))
-        print(f"  Found {message_count} messages")
-        print(f"  Total content: {len(messages_content)} characters")
+        with self.progress_lock:
+            print(f"  📊 {csv_path.name}: {message_count} messages, {len(messages_content)} characters")
         
         # Prepare prompt
         prompt = self.prompt_template.replace('{messages_content}', messages_content)
         
         # Call API
-        result = self.call_openrouter_api(prompt, file_index)
+        result = self.call_openrouter_api(prompt, file_index, csv_path.name)
         
         if result is None:
-            print(f"  ❌ API call failed after all retries")
+            with self.progress_lock:
+                print(f"  ❌ {csv_path.name}: API call failed after all retries")
             return False
             
         # Save result
         with open(output_file, 'w', encoding='utf-8') as f:
             f.write(result)
             
-        print(f"  💾 Saved: {output_file} ({len(result)} characters)")
+        with self.progress_lock:
+            print(f"  ✅ {csv_path.name}: Saved {output_file.name} ({len(result)} characters)")
         
         return True
+    
+    def process_files_parallel(self, files: List[Path]) -> Tuple[int, int, int, List[str]]:
+        """Process multiple files in parallel. Returns (successful, failed, skipped, error_messages)."""
+        successful = 0
+        failed = 0
+        skipped = 0
+        error_messages = []
+        total_files = len(files)
+        
+        # Handle interactive mode - force sequential processing
+        max_workers = 1 if self.args.interactive else self.args.max_parallel
+        
+        print(f"\n🔄 Processing {total_files} files with {max_workers} parallel worker(s)")
+        print("-" * 60)
+        
+        # Pre-filter files that should be skipped
+        files_to_process = []
+        for i, csv_file in enumerate(files, 1):
+            output_file = self.get_output_filename(csv_file)
+            if self.args.skip_existing and output_file.exists():
+                print(f"⏭️  [{i}/{total_files}] Skipping existing: {output_file.name}")
+                skipped += 1
+            else:
+                files_to_process.append((csv_file, i))
+        
+        if not files_to_process:
+            return successful, failed, skipped, error_messages
+        
+        # Process files in parallel
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all tasks
+            futures = []
+            for csv_file, file_index in files_to_process:
+                future = executor.submit(self.process_csv_file_task, csv_file, file_index, total_files)
+                futures.append(future)
+            
+            # Collect results as they complete
+            for future in as_completed(futures):
+                success, filename, error_msg = future.result()
+                
+                if success:
+                    successful += 1
+                else:
+                    failed += 1
+                    error_msg_formatted = f"{filename}: {error_msg}" if error_msg else f"{filename}: Unknown error"
+                    error_messages.append(error_msg_formatted)
+                    
+                # Interactive mode handling
+                if self.args.interactive and len(files_to_process) > 1:
+                    with self.progress_lock:
+                        remaining = len([f for f in futures if not f.done()])
+                        if remaining > 0:
+                            print(f"\n⏸️  File completed. {remaining} remaining. Press Enter to continue or Ctrl+C to stop...")
+                            input()
+        
+        return successful, failed, skipped, error_messages
         
     def run(self):
         """Main execution flow."""
@@ -457,41 +542,9 @@ class DataExtractor:
         self.prompt_template = self.load_prompt_template()
         print(f"✓ Prompt template loaded from: {self.args.prompt_file}")
         
-        # Process each file
+        # Process files in parallel
+        successful, failed, skipped, error_messages = self.process_files_parallel(files)
         total_files = len(files)
-        successful = 0
-        failed = 0
-        skipped = 0
-        
-        for i, csv_file in enumerate(files, 1):
-            self.current_file_index = i
-            
-            print(f"\n{'=' * 60}")
-            print(f"File {i}/{total_files}: {csv_file.name}")
-            print(f"{'=' * 60}")
-            
-            # Check if should skip
-            output_file = self.get_output_filename(csv_file)
-            if self.args.skip_existing and output_file.exists():
-                print(f"⏭️  Skipping existing file: {output_file.name}")
-                skipped += 1
-                continue
-            
-            # Process file
-            success = self.process_csv_file(csv_file, i)
-            
-            if success:
-                successful += 1
-            else:
-                failed += 1
-                print(f"\n❌ Extraction failed for {csv_file.name}")
-                print(f"   Stopping process due to failure.")
-                break
-                
-            # Interactive mode
-            if self.args.interactive and i < total_files:
-                print(f"\n⏸️  File {i} completed. Press Enter to continue or Ctrl+C to stop...")
-                input()
                 
         # Summary
         print(f"\n{'=' * 60}")
@@ -501,9 +554,14 @@ class DataExtractor:
         print(f"   Skipped: {skipped}")
         print(f"   Total processed: {successful + failed + skipped}/{total_files}")
         
+        if error_messages:
+            print(f"\n❌ Failed files:")
+            for error_msg in error_messages:
+                print(f"   • {error_msg}")
+        
         if failed > 0:
-            print(f"\n⚠️  Some files failed to process.")
-            print(f"   You can retry with the same command.")
+            print(f"\n⚠️  {failed} files failed to process.")
+            print(f"   You can retry with the same command to process failed files.")
             sys.exit(1)
 
 
@@ -536,6 +594,8 @@ Examples:
                         help='Skip files that already have analysis output')
     parser.add_argument('-y', '--yes', action='store_true',
                         help='Skip confirmation prompt')
+    parser.add_argument('--max-parallel', type=int, default=3,
+                        help='Maximum parallel file processing (default: 3)')
     
     args = parser.parse_args()
     
