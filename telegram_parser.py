@@ -110,6 +110,8 @@ def init_csv(csv_path: Path) -> bool:
                     "media_type",
                     "media_path",
                     "link",
+                    "reply_to_msg_id",
+                    "grouped_id",
                 ]
             )
     return csv_exists
@@ -231,6 +233,8 @@ class CSVWriter:
                 "media_type",
                 "media_path",
                 "link",
+                "reply_to_msg_id",
+                "grouped_id",
             ]
         )
 
@@ -267,6 +271,14 @@ def extract_message_data(
     message, entity, media_type: Optional[str], media_path: Optional[str]
 ) -> dict:
     """Extract relevant data from a Telegram message."""
+    # Extract reply_to_msg_id if message is a reply
+    reply_to_msg_id: Optional[int] = None
+    if message.reply_to is not None:
+        reply_to_msg_id = getattr(message.reply_to, "reply_to_msg_id", None)
+
+    # Extract grouped_id for album messages
+    grouped_id: Optional[int] = getattr(message, "grouped_id", None)
+
     row = {
         "id": message.id,
         "date_iso": message.date.isoformat() if message.date else None,
@@ -283,6 +295,8 @@ def extract_message_data(
         "link": f"https://t.me/{entity.username}/{message.id}"
         if getattr(entity, "username", None)
         else None,
+        "reply_to_msg_id": reply_to_msg_id,
+        "grouped_id": grouped_id,
     }
 
     # Try to resolve sender name
@@ -373,6 +387,8 @@ async def export_channel(
                         row["media_type"],
                         row["media_path"],
                         row["link"],
+                        row["reply_to_msg_id"],
+                        row["grouped_id"],
                     ]
                 )
 
