@@ -95,11 +95,14 @@ DEFAULT_TIER2_PROMPT = """You are creating a digest of interesting discussions f
 ## Extracted Discussions:
 {summaries}
 
+## User Activity Stats:
+{user_stats}
+
 ## Task:
 Create a readable digest that tells the story of each interesting discussion. For each discussion:
 1. Merge related topics from different chunks into cohesive narratives
-2. Include participant names to show who said what
-3. Embed relevant quotes naturally within the narrative
+2. ALWAYS attribute quotes to their authors: "@username сказал: 'quote'" or "@username noted: 'quote'"
+3. Show who participated and what role they played in each discussion
 4. Include links where they add value
 5. Skip low-importance discussions (importance < 3)
 
@@ -116,7 +119,7 @@ Markdown with this structure:
 ## [Topic Title]
 
 [2-5 paragraph narrative describing the discussion flow. Who started it, what points were made,
-how others responded. Embed quotes naturally like: @username отметил: "quote here".
+how others responded. ALWAYS attribute quotes: @username отметил: "quote here".
 Include links inline where relevant: обсуждали [тему](url).]
 
 ---
@@ -124,6 +127,13 @@ Include links inline where relevant: обсуждали [тему](url).]
 ## [Next Topic Title]
 
 [Another discussion narrative...]
+
+---
+
+## Топ участников (or "Top Participants" for English)
+
+[List top 10 most active users from the stats above with their message counts.
+Format: 1. @username — X сообщений]
 
 ---
 
@@ -391,6 +401,53 @@ class PipelineConfig:
 
 
 # =============================================================================
+# Helper Functions
+# =============================================================================
+
+
+def calculate_user_stats(messages: list[Any], top_n: int = 10) -> str:
+    """
+    Calculate message counts per user and return formatted stats.
+
+    Args:
+        messages: List of message objects with from_name attribute
+        top_n: Number of top users to include
+
+    Returns:
+        Formatted string with top N users and their message counts.
+    """
+    from collections import Counter
+
+    user_counts: Counter[str] = Counter()
+    for msg in messages:
+        # Handle both dict and object formats
+        if hasattr(msg, 'from_name'):
+            username = msg.from_name or "Unknown"
+        elif isinstance(msg, dict):
+            username = msg.get('from_name') or msg.get('sender_name') or "Unknown"
+        else:
+            continue
+        user_counts[username] += 1
+
+    if not user_counts:
+        return "No user activity data available."
+
+    # Get top N
+    top_users = user_counts.most_common(top_n)
+
+    # Format as numbered list
+    lines = []
+    for i, (username, count) in enumerate(top_users, 1):
+        # Add @ prefix if not already present and not "Unknown"
+        display_name = username
+        if username != "Unknown" and not username.startswith("@"):
+            display_name = f"@{username}"
+        lines.append(f"{i}. {display_name} — {count} messages")
+
+    return "\n".join(lines)
+
+
+# =============================================================================
 # Extraction Pipeline
 # =============================================================================
 
@@ -512,11 +569,14 @@ class ExtractionPipeline:
             message=f"Created {len(chunks)} chunks"
         ))
 
+        # Calculate user activity stats (from raw messages, before dedup)
+        user_stats = calculate_user_stats(raw_messages)
+
         # Phase 4: Tier 1 - Parallel chunk extraction
         summaries = self._extract_tier1(chunks)
 
         # Phase 5: Tier 2 - Synthesis
-        synthesis = self._synthesize_tier2(summaries, len(chunks), timestamp)
+        synthesis = self._synthesize_tier2(summaries, len(chunks), timestamp, user_stats)
 
         # Compile results
         successful = sum(1 for s in summaries if s.success)
@@ -629,6 +689,7 @@ class ExtractionPipeline:
         summaries: list[ChunkSummary],
         chunk_count: int,
         timestamp: str,
+        user_stats: str = "",
     ) -> str:
         """Run Tier 2 synthesis on chunk summaries."""
         self._report_progress(ProgressUpdate(
@@ -650,6 +711,7 @@ class ExtractionPipeline:
             summaries=summaries_text,
             chunk_count=chunk_count,
             timestamp=timestamp,
+            user_stats=user_stats,
         )
 
         # Call provider
