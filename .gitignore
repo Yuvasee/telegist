@@ -19,7 +19,8 @@ ENV/
 
 # Output folders (parser results)
 *_output/
-output/
+output/*
+!output/.gitkeep
 export/
 final/
 

@@ -1,196 +1,148 @@
-# Telegram Channel Parser
+# Telegist
 
-Export messages from public Telegram channels to CSV and JSONL formats. Supports resuming interrupted exports and optional media download.
+Telegram channel/chat parser with LLM-powered discussion extraction. Parses messages from Telegram channels and creates narrative digests of discussions using a two-tier LLM approach.
 
 ## Features
 
 - Export channel messages to CSV and JSONL formats
-- Resume from last exported message if interrupted
-- Optional media download (photos, documents)
-- **Split large CSV files** into manageable chunks for LLM analysis
-- Progress bar with real-time updates
-- Handles rate limits gracefully
-- CLI interface with channel as parameter
-- Credentials stored securely in `.env` file
+- **Two-tier LLM extraction**: Fast chunk processing + quality synthesis
+- **Discussion-based narratives**: Stories with participants, quotes, and links
+- **Language-aware**: Russian chats → Russian output
+- Resume interrupted exports
+- Cost tracking for API usage
+- Support for private channels (by numeric ID)
 
-## Prerequisites
-
-1. Python 3.7+
-2. Telegram API credentials (API ID and API Hash)
-
-## Setup
-
-### 1. Get Telegram API Credentials
-
-1. Go to https://my.telegram.org
-2. Log in with your phone number
-3. Navigate to "API development tools"
-4. Create an app to get your `API_ID` and `API_HASH`
-
-### 2. Install Dependencies
+## Quick Start
 
 ```bash
-# Create virtual environment (recommended)
-python3 -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# Install requirements
+# Install dependencies
 pip install -r requirements.txt
-```
 
-### 3. Configure Environment
-
-```bash
-# Copy the example env file
+# Setup credentials
 cp .env.example .env
+# Edit .env: add TG_API_ID, TG_API_HASH, OPENROUTER_API_KEY
 
-# Edit .env and add your credentials
-# TG_API_ID=123456
-# TG_API_HASH=your_api_hash_here
+# Run from src/ directory
+cd src
+
+# Parse channel (last 2 days)
+python telegram_parser.py @channel_name --days 2 --output ../output
+
+# Run extraction pipeline
+python extraction_pipeline.py ../output/messages.jsonl -o ../output/extraction --show-cost
+
+# Send result to Telegram Saved Messages
+python send_to_telegram.py ../output/extraction/synthesis.md ../output
 ```
 
-## Usage
+## Project Structure
 
-### Basic Export (Text Only)
+```
+telegist/
+├── src/                        # All source code
+│   ├── telegram_parser.py      # Main parser CLI
+│   ├── extraction_pipeline.py  # Two-tier LLM extraction
+│   ├── semantic_chunker.py     # Message chunking
+│   ├── preprocessor.py         # Deduplication
+│   ├── cost_tracker.py         # API cost tracking
+│   ├── find_chat.py            # Find chats by name
+│   ├── send_to_telegram.py     # Send results to TG
+│   └── providers/              # LLM API providers
+├── output/                     # Parser output (gitignored)
+├── legacy/                     # Old scripts (deprecated)
+├── .env                        # API keys (not in git)
+└── requirements.txt            # Python dependencies
+```
+
+## Environment Variables
+
+Required in `.env`:
 
 ```bash
-python telegram_parser.py @channel_name
+# Telegram API (from https://my.telegram.org)
+TG_API_ID=...
+TG_API_HASH=...
+
+# OpenRouter API (for LLM access)
+OPENROUTER_API_KEY=...
 ```
 
-### Export with Media
+## Commands
+
+All commands run from `src/` directory:
+
+### Parsing
 
 ```bash
-python telegram_parser.py @channel_name --with-media
+# Parse public channel
+python telegram_parser.py @channel_name --days 7 --output ../output
+
+# Parse private channel by numeric ID
+python telegram_parser.py -- -1001784493554 --days 7 --output ../output
+
+# Find private channel ID by name
+python find_chat.py "channel name" ../output
 ```
 
-### Custom Output Directory
+### Extraction
 
 ```bash
-python telegram_parser.py @channel_name --output ./my_export
+# Full extraction with cost tracking
+python extraction_pipeline.py ../output/messages.jsonl -o ../output/extraction --show-cost
 ```
 
-### Split Large CSV Files
-
-For easier LLM analysis, you can split CSV files into smaller chunks:
+### Send Results
 
 ```bash
-# Split into files with 1000 messages each
-python telegram_parser.py @channel_name --split-size 1000
-
-# Split into files with 500 messages each
-python telegram_parser.py @channel_name --split-size 500
+# Send synthesis to Telegram Saved Messages
+python send_to_telegram.py ../output/extraction/synthesis.md ../output
 ```
 
-### Examples
+## Output Format
 
-```bash
-# Export BBC News channel
-python telegram_parser.py @bbcnews
+The pipeline produces **discussion-based narrative digests**:
 
-# Export with media to custom directory
-python telegram_parser.py @bbcnews --with-media --output ./bbc_export
+```markdown
+# Дайджест обсуждений
 
-# Using t.me link format
-python telegram_parser.py t.me/bbcnews
+## Настройка Go в редакторе Zed
 
-# Smaller batch size (useful for channels with rate limits)
-python telegram_parser.py @channel_name --page-size 50
+Участники обсуждали сложности работы с Go в Zed. @username сказал:
+"короче go в zed это еще тот адище". В ответ поделились
+[конфигурацией](https://github.com/...) для решения проблемы...
 
-# Split large channel into 2000-message CSV files
-python telegram_parser.py @large_channel --split-size 2000
+---
+
+**Период**: Jan 15-17, 2026
+**Сообщений**: 200
 ```
 
-## Output
+## Two-Tier Architecture
 
-The script creates the following files in the output directory:
+1. **Tier 1** (Gemini 2.0 Flash): Parallel extraction from chunks
+   - Extracts: topic, participants, summary, quotes, links
+   - ~$0.003 per 100 messages
 
-- `messages.csv` - Spreadsheet-friendly format with one message per row (or `messages_001.csv`, `messages_002.csv`, etc. when using `--split-size`)
-- `messages.jsonl` - JSON Lines format with full message data
-- `media/` - Downloaded media files (if `--with-media` is used)
-- `telegram_session.session` - Session file for resuming
+2. **Tier 2** (Claude Sonnet 4): Synthesis into narrative
+   - Merges related discussions
+   - Creates readable narratives
+   - ~$0.06 per synthesis
 
-### CSV Columns
+## Cost Reference
 
-- `id` - Message ID
-- `date_iso` - Message timestamp (ISO format)
-- `from_id` - Sender user ID
-- `from_name` - Sender username or name
-- `text` - Message text
-- `views` - View count
-- `forwards` - Forward count
-- `replies` - Reply count
-- `media_type` - Type of attached media
-- `media_path` - Path to downloaded media file
-- `link` - Direct link to message
-
-## Resuming Exports
-
-The script automatically resumes from the last exported message if interrupted. Just run the same command again:
-
-```bash
-# First run (interrupted with Ctrl+C)
-python telegram_parser.py @large_channel
-
-# Resume from where it left off
-python telegram_parser.py @large_channel
-```
-
-## CSV Splitter Utility
-
-For users who have already exported data and want to split existing CSV files, use the `csv_splitter.py` utility:
-
-```bash
-# Split existing CSV into 1000-message files
-python csv_splitter.py messages.csv --split-size 1000
-
-# Split with custom output directory and prefix
-python csv_splitter.py messages.csv --split-size 500 --output-dir ./split --prefix export
-
-# See all options
-python csv_splitter.py --help
-```
-
-The splitter will create files like `messages_001.csv`, `messages_002.csv`, etc., each with the same CSV headers as the original file.
-
-## Command-Line Options
-
-```
-positional arguments:
-  channel               Channel to export (@username or t.me/slug)
-
-optional arguments:
-  -h, --help            Show help message
-  -o, --output OUTPUT   Output directory (default: ./export)
-  --with-media          Download media files (photos, documents)
-  --page-size SIZE      Messages per batch (default: 100)
-  --session NAME        Session file name (default: telegram_session)
-  --split-size SIZE     Split CSV into files with max N messages each
-```
+| Dataset Size | Chunks | Cost | Duration |
+|-------------|--------|------|----------|
+| 100 messages | ~14 | $0.07 | 1m |
+| 200 messages | ~35 | $0.15 | 2m |
+| 2000 messages | ~300 | $0.90 | 4m |
 
 ## Notes
 
-- **Rate Limits**: The script handles rate limits gracefully. If you hit a flood wait, just rerun the command
-- **Large Channels**: Exporting channels with many messages can take hours, especially with media
-- **Private Channels**: This script only works with public channels or channels you've already joined
-- **Resuming**: The script tracks progress in the JSONL file and resumes from the last message ID
+- **Session files**: Reuse `telegram_session.session` across runs to avoid re-auth
+- **Rate limits**: Parser handles FloodWaitError gracefully
+- **Resume**: Parser resumes from last message ID if interrupted
+- **Numeric IDs**: Use `--` before negative IDs: `python telegram_parser.py -- -1001234567`
 
-## Legal & Ethical Considerations
+## License
 
-- Only export channels you have permission to archive
-- Respect channel terms of service and local laws
-- Don't use for spam, harassment, or unauthorized redistribution
-- Be mindful of rate limits and Telegram's terms of service
-
-## Troubleshooting
-
-### "Set TG_API_ID and TG_API_HASH env vars first"
-Make sure your `.env` file exists and contains valid credentials.
-
-### FloodWaitError
-You're hitting rate limits. Wait the specified time and rerun the command.
-
-### Can't find channel
-Ensure the channel is public and use the correct format: `@channel_name` or `t.me/channel_name`
-
-### Session file issues
-Delete the `.session` file in the output directory and try again.
+MIT

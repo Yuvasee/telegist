@@ -9,7 +9,7 @@ Telegram channel/chat parser with LLM-powered discussion extraction. Parses mess
 ## Project Structure
 
 ```
-telegram-channel-parser/
+telegist/
 ├── src/                        # All source code
 │   ├── telegram_parser.py      # Main parser CLI
 │   ├── extraction_pipeline.py  # Two-tier LLM extraction
@@ -24,6 +24,7 @@ telegram-channel-parser/
 │       ├── openrouter.py       # OpenRouter provider
 │       ├── gemini.py           # Google Gemini provider
 │       └── anthropic.py        # Anthropic provider
+├── output/                     # Parser output (gitignored contents)
 ├── legacy/                     # Old scripts (deprecated)
 ├── .env                        # API keys (not in git)
 ├── .env.example                # Environment template
@@ -183,7 +184,7 @@ output/
 - **Rate limits**: Parser handles FloodWaitError gracefully
 - **Resume**: Parser resumes from last message ID if interrupted
 - **Numeric IDs**: Use `--` before negative IDs: `python telegram_parser.py -- -1001234567`
-- **Output folders**: All `*_output/` patterns are gitignored
+- **Output folder**: Use `output/` for all parser results (contents gitignored)
 
 ## Development
 
